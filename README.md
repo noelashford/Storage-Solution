@@ -136,14 +136,14 @@ Implements the SLOs and test plan on the current site plan: storage shares the s
 
 ```mermaid
 flowchart LR
-  subgraph RACK [Rack: Dual 400G Rails (Shared)]
-    TRAIN[Training RDMA (High Priority, Lossless)]
-    STOR[Storage + IP (Lower Priority QoS)]
+  subgraph RACK [Rack Dual 400G Rails Shared]
+    TRAIN[Training RDMA High Priority Lossless]
+    STOR[Storage and IP Lower Priority QoS]
   end
-  TRAIN -- RoCEv2 --> RailA[Rail-A 400G]
-  TRAIN -- RoCEv2 --> RailB[Rail-B 400G]
-  STOR -- RoCEv2 --> RailA
-  STOR -- RoCEv2 --> RailB
+  TRAIN --> RailA[Rail A 400G]
+  TRAIN --> RailB[Rail B 400G]
+  STOR --> RailA
+  STOR --> RailB
 ```
 
 - Training traffic runs in a higher-priority lossless class.
