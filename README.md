@@ -1,140 +1,154 @@
-# Starcluster GB300 / NVL72 Storage Solution(s)
+# Starcluster GB300 / NVL72 — Storage Deliverable (50 MW)
 
-**50MW Deployment**
+This document delivers Option 1 (Checkpoint SLOs & Capacity Model) and Option 2 (Storage Acceptance Test Plan) as requested. Sections 3 and 4 are bonus architecture: Section 3 aligns to the current dual 400 G shared-rail site plan; Section 4 proposes the best-possible variant with separate storage rails.
 
 ## Table of Contents
 
-- [Starcluster GB300 / NVL72 Storage Solution(s)](#starcluster-gb300--nvl72-storage-solutions)
+- [Starcluster GB300 / NVL72 — Storage Deliverable (50 MW)](#starcluster-gb300--nvl72--storage-deliverable-50-mw)
   - [Table of Contents](#table-of-contents)
   - [Option 1 — Checkpoint SLOs \& Capacity Model](#option-1--checkpoint-slos--capacity-model)
-    - [1.1 Scope \& Baseline](#11-scope--baseline)
+    - [1.1 Site \& Rack Baseline (from plan)](#11-site--rack-baseline-from-plan)
     - [1.2 SLOs (Targets)](#12-slos-targets)
     - [1.3 Capacity Model (Simple, Rack-Driven)](#13-capacity-model-simple-rack-driven)
   - [Option 2 — Storage Acceptance Test Plan (RFS Gate)](#option-2--storage-acceptance-test-plan-rfs-gate)
     - [2.1 Principles](#21-principles)
     - [2.2 Tooling](#22-tooling)
-    - [2.3 Test Matrix (excerpt)](#23-test-matrix-excerpt)
-    - [2.4 Gate \& Rollout](#24-gate--rollout)
-  - [Section 3 — Bonus: Proposed Architectures, Flows, Telemetry, Fault Domains](#section-3--bonus-proposed-architectures-flows-telemetry-fault-domains)
-    - [3.1 Inference-First (Latency Champion)](#31-inference-first-latency-champion)
-    - [3.2 Training-First (Throughput Champion)](#32-training-first-throughput-champion)
-    - [3.3 North–South vs East–West (with Exabyte Tier)](#33-northsouth-vs-eastwest-with-exabyte-tier)
+    - [2.3 RFS-Gate Test Matrix](#23-rfs-gate-test-matrix)
+    - [2.4 Gate \& rollout](#24-gate--rollout)
+  - [Architecture (Shared Rails) — Inference \& Training, Flows, Telemetry, Fault Domains](#architecture-shared-rails--inference--training-flows-telemetry-fault-domains)
+    - [3.1 Rail Sharing (QoS View)](#31-rail-sharing-qos-view)
+    - [3.2 Inference (Latency-First)](#32-inference-latency-first)
+    - [3.3 Training (Throughput-First)](#33-training-throughput-first)
     - [3.4 Telemetry \& Alarming (implements Option 2 gates)](#34-telemetry--alarming-implements-option-2-gates)
     - [3.5 Failure Domains \& Guardrails](#35-failure-domains--guardrails)
-    - [3.6 RDMA "Local" Strategy \& Off-Rack Arrays](#36-rdma-local-strategy--off-rack-arrays)
-    - [3.7 Vendor Fit (Quick Table)](#37-vendor-fit-quick-table)
-    - [3.8 Acronyms (expanded, alphabetized)](#38-acronyms-expanded-alphabetized)
+  - [Bonus: "THE BEST" — Separate Storage Rails (Recommendation)](#bonus-the-best--separate-storage-rails-recommendation)
+    - [4.1 What changes](#41-what-changes)
+    - [4.2 Revised SLOs (with separate rails)](#42-revised-slos-with-separate-rails)
+    - [4.3 Sketch (separate rails)](#43-sketch-separate-rails)
+    - [4.4 Back-end mapping \& migration](#44-back-end-mapping--migration)
+  - [Acronyms (Expanded, Alphabetized)](#acronyms-expanded-alphabetized)
 
 ## Option 1 — Checkpoint SLOs & Capacity Model
 
-### 1.1 Scope & Baseline
+### 1.1 Site & Rack Baseline (from plan)
 
-**Platform:** GB300 NVL72 (per rack = 72 GPUs, single NVLink domain).
+**Power Target:** 50 MW IT load.
 
-**Per tray:** 4x ConnectX-8 SuperNICs (800G each) and up to 8x E1.S NVMe.
+**Racks:** 9 zones × 32 racks = 288 racks.
 
-**Fabrics:** Compute (IB XDR 800G), Storage (IB XDR 800G or RoCE 2x400G/port).
+**Per-rack links:** 2 × 400 G rails (aggregate ≈ 100 GB/s).
 
-**Hot path principle:** RDMA → GDS → GPU; first commit remains in-rack.
+**Fabric:** RoCEv2 on both rails; storage/IP share the rails under lower-priority QoS; separate mgmt L3.
+
+**Switching:** 400 G leaf/spine design (e.g., TH5-class).
+
+**Ops:** intent-based rollouts via Kubernetes operators.
 
 ### 1.2 SLOs (Targets)
 
-**Checkpoint commit (per tray):**
-- Write throughput offered: ≥ 200 GB/s (2 storage rails x ~100 GB/s).
-- Latency: P99 4 MiB write ≤ 0.8 ms on Local+Rack path.
-- Durability: 2-of-2 in-rack durable before ACK (Local NVMe + Rack NVMe-oF).
+**Checkpoint commit (per rack / shared rails):**
+- Write throughput offered: ≥ 68–80 GB/s into Local + Rack (see §3), sized below the 100 GB/s rack ceiling.
+- Latency: P99 4 MiB write ≤ 0.8 ms (GDS + RDMA).
+- Durability: 2-of-2 in-rack (Local NVMe and Rack NVMe-oF) before ACK.
 
-**Dataset reads (per tray):**
-- Throughput: ≥ 100–160 GB/s aggregate across Local + Rack + Global FS.
-- Latency: P99 1 MiB read ≤ 1.5 ms via GDS.
+**Dataset reads (per rack):** ≥ 100 GB/s aggregate (Local + Rack + Global), P99 1 MiB ≤ 1.5 ms via GDS.
 
-**Inference I/O (per cell):**
-- Latency: P99 1 MiB read ≤ 1.0 ms (GDS from Local/Rack).
-- End-to-end L4: P99 < 10 ms per request (excluding token generation).
+**Inference I/O (per cell):** P99 1 MiB read ≤ 1.0 ms via GDS; end-to-end L4 P99 < 10 ms per request (excluding token generation).
 
 ### 1.3 Capacity Model (Simple, Rack-Driven)
 
-**Formulas**
+Let:
+- R = racks (≤ 288)
+- S_TB = checkpoint size per rack (TB)
+- T_sec = commit target (s)
+- D_min = drain window (min)
 
-Per-rack hot-commit bandwidth (GB/s):
+**Per-rack hot-commit (GB/s):**
 ```
-GBps_per_rack = 1024 * checkpoint_TB_per_rack / seconds_to_commit
-```
-
-Cluster drain requirement (GB/s):
-```
-GBps_cluster = (1024 * checkpoint_TB_per_rack * racks) / (60 * drain_minutes)
+GBps_per_rack = 1024 * S_TB / T_sec
 ```
 
-TB/min cluster (reporting):
+**Cluster drain (GB/s):**
+```
+GBps_cluster = (1024 * S_TB * R) / (60 * D_min)
+```
+
+**TB/min cluster:**
 ```
 TB_per_min = (GBps_cluster / 1024) * 60
 ```
 
-**Example Table (illustrative)**
+**Illustrative sizing (fits the rails & QoS):**
 
 | Parameter | Value |
 |-----------|--------|
-| Checkpoint size per rack (TB) | 12 |
-| Commit interval (sec) | 60 |
-| Racks | 50 / 100 / 200 |
-| Drain window (min) | 10 |
+| Racks (R) | 288 |
+| Checkpoint per rack (S_TB) | 8 TB |
+| Commit target (T_sec) | 120 s |
+| Drain window (D_min) | 10 min |
 
-**Computed**
+**Computed:**
+- **Per-rack hot-commit:** 1024×8/120 ≈ 68.3 GB/s (≤ 100 GB/s budget ✔)
+- **Cluster drain:** (1024×8×288)/(60×10) ≈ 3,931 GB/s (≈ 3.84 TB/s)
+- **TB/min cluster:** (3,931/1024)×60 ≈ 230 TB/min
 
-Per-rack hot-commit: `GBps_per_rack = 1024*12/60 = 204.8 GB/s`
-
-Cluster drain: `GBps_cluster = (1024*12*racks)/(60*10) = 20.48 * racks GB/s`
-
-TB/min cluster: `TB_per_min = (GBps_cluster / 1024) * 60 = 1.2 * racks TB/min`
-
-| Racks | Per-rack Commit (GB/s) | Cluster Drain (GB/s) | Cluster TB/min |
-|-------|------------------------|----------------------|----------------|
-| 50    | 204.8                  | 1,024               | 60             |
-| 100   | 204.8                  | 2,048               | 120            |
-| 200   | 204.8                  | 4,096               | 240            |
-
-**Interpretation:** With a 12 TB/rack checkpoint every 60s, each rack must commit ~205 GB/s. A 100-rack site must drain ~2 TB/s to empty in 10 minutes (120 TB/min).
+If S_TB or T_sec change, recalc with the same formulas. If commit exceeds the 100 GB/s rack budget, stagger commits or adopt separate storage rails (see §4).
 
 ## Option 2 — Storage Acceptance Test Plan (RFS Gate)
 
 ### 2.1 Principles
 
-- Vendor-neutral tooling, reproducible procedures.
-- Pass/fail thresholds tied to SLOs above.
-- Covers normal, burst, and degraded modes with failure injection.
+- Vendor-neutral tooling & procedures.
+- Pass/fail tied directly to Option 1 SLOs.
+- Covers normal, burst/cache soak, and degraded modes with failure injection.
 
 ### 2.2 Tooling
 
-**fio** (NVMe and NVMe-oF RDMA), **IOR / MLPerf-Storage** (checkpoint profiles), **ib_write_bw / ib_read_lat** (fabric), **nccl-tests** (collectives sanity), **Triton dry-load** (inference latency probe), **DCGM/GDS/FS exporters** (telemetry).
+**fio** (NVMe & NVMe-oF RDMA), **IOR / MLPerf-Storage** (checkpoint profiles), **ib_write_bw / ib_read_lat** (rail sanity), **nccl-tests** (collectives), **Triton dry-load** (inference I/O latency), **telemetry exporters** (cuFile/GDS, NVMe, FS, UFM/roce-stats), **Prometheus/Thanos/Kafka/Loki**, **API load** (k6/wrk) for N-S ingress.
 
-### 2.3 Test Matrix (excerpt)
+### 2.3 RFS-Gate Test Matrix
 
-| Test | Purpose | Procedure | Pass/Fail |
-|------|---------|-----------|-----------|
-| Checkpoint Hot-Commit Soak | Validate write SLO & ACK policy | On N trays per rack, write 4 MiB records at QD>>1 to Local + Rack NVMe-oF in parallel for T=30 min; capture P50/P99 and ACK path | PASS if P99 ≤ 0.8 ms, rails ≥ 200 GB/s/tray offered, ACKs show 2-of-2 durable |
-| Burst/Cache Soak | Validate buffers and drain | Fill Local + Rack to S TB/rack, then drain to Global FS | PASS if drain clears within D minutes and no GPU stalls |
-| Degraded Device | SSD fails or GC spike | Mark 1 SSD degraded; repeat hot-commit test | PASS if ≥ 70% throughput sustained and P99 within 2x of target; reweight to Rack/Global observed |
-| NVMe-oF Path Loss | Rack target path down | Disable one NVMe-oF port; run fio 1 MiB/4 MiB | PASS if no I/O errors; multipath rebalances within seconds; rail utilization ≥ 80% |
-| Fabric Bandwidth | Link sanity | ib_write_bw 4 MiB multi-rail; compare to spec | PASS if ≥ 90% of theoretical; no credit stalls/ECN storms |
-| FS Parallel I/O | Global drain capacity | IOR (POSIX) or MLPerf-Storage to Global FS at site scale | PASS if GB/s_cluster (from Option 1) achieved for 30 min |
-| Inference Probe | P99 guard | Triton dry-load; 1 MiB reads via GDS | PASS if P99 < 1.0 ms (I/O) and E2E L4 P99 < 10 ms |
+| Test | Purpose | Procedure | Pass / Fail |
+|------|---------|-----------|-------------|
+| Rail sanity | Validate 2×400 G rails | ib_write_bw (4 MiB), multi-rail; watch ECN/PAUSE | ≥ 90% of theoretical; no ECN storms |
+| QoS isolation | Training wins vs storage | Run NCCL ring/all-reduce + concurrent fio writes; storage class lower priority | NCCL bw stable (±5%); storage rate-limited without loss |
+| Checkpoint hot-commit | Meet per-rack write SLO | Parallel 4 MiB writes (QD ≫ 1) to Local + Rack via GDS for 30 min | ≥ 68 GB/s (example above); P99 4 MiB ≤ 0.8 ms; ACKs show 2-of-2 durable |
+| Burst/cache soak | Verify drain window | Fill Local + Rack to S_TB; drain to FS; rails shared | Clears in D_min with no NCCL regression |
+| Degraded SSD | Device failure | Mark 1 NVMe degraded; rerun hot-commit | ≥ 70% throughput, P99 ≤ 2× target; reweight to Rack/FS observed |
+| NVMe-oF path loss | Link/target failover | Drop one path/port; run 1 MiB & 4 MiB fio | No I/O errors; multipath swaps < 2 s; rail util ≥ 80% |
+| FS parallel I/O | E2E drain capacity | IOR / MLPerf-Storage to WEKA/GPFS/Lustre | Hit GBps_cluster (Option 1) for ≥ 30 min |
+| Inference I/O probe | Sub-ms reads | Triton dry-load; 1 MiB via GDS from Local/Rack | P99 ≤ 1.0 ms (I/O); E2E P99 < 10 ms excl. generation |
 
-### 2.4 Gate & Rollout
+### 2.4 Gate & rollout
 
-**Pre-RFS:** All tests PASS at rack and site scope.
+**RFS:** all tests PASS at zone scale (e.g., 32 racks) before scaling to 288.
 
-**Release CI/CD:** Run a reduced suite (fabric + NVMe-oF + Triton probe) per cell; block rollout on regressions.
+**Release CI/CD:** reduced suite (rail sanity, NVMe-oF fio, Triton probe) per cell; block rollout on regressions.
 
-**Degraded Mode:** Any single failure must keep ≥ 70% throughput and ≤ 2x P99.
+**Degraded mode:** any single failure keeps ≥ 70% throughput and ≤ 2× P99.
 
-## Section 3 — Bonus: Proposed Architectures, Flows, Telemetry, Fault Domains
+## Architecture (Shared Rails) — Inference & Training, Flows, Telemetry, Fault Domains
 
-The following implements the SLOs and the test plan above.
+Implements the SLOs and test plan on the current site plan: storage shares the same 2×400 G rails with training (lower-priority QoS).
 
-### 3.1 Inference-First (Latency Champion)
+### 3.1 Rail Sharing (QoS View)
 
-**Key:** sub-ms P99, hot weights/context in the chosen cell, GDS everywhere.
+```mermaid
+flowchart LR
+  subgraph RACK [Rack: Dual 400G Rails (Shared)]
+    TRAIN[Training RDMA (High Priority, Lossless)]
+    STOR[Storage + IP (Lower Priority QoS)]
+  end
+  TRAIN -- RoCEv2 --> RailA[Rail-A 400G]
+  TRAIN -- RoCEv2 --> RailB[Rail-B 400G]
+  STOR -- RoCEv2 --> RailA
+  STOR -- RoCEv2 --> RailB
+```
+
+- Training traffic runs in a higher-priority lossless class.
+- Storage/IP ride lower-priority classes and back off during contention; checkpoint lands Local + Rack then drains (Option 2 tests cover this).
+
+### 3.2 Inference (Latency-First)
 
 ```mermaid
 sequenceDiagram
@@ -155,116 +169,60 @@ sequenceDiagram
   end
   Cell->>GPU: Read 1-4MiB via GDS (weighted L/R/FS)
   GPU-->>Client: Tokens stream
-  Cell->>FS: Persist context (N-S path in background)
+  Cell->>FS: Persist context (N-S path, background)
 ```
 
-### 3.2 Training-First (Throughput Champion)
-
-**Key:** TB/s drains, parallel hot-commit with in-rack durability.
+### 3.3 Training (Throughput-First)
 
 ```mermaid
 sequenceDiagram
   autonumber
-  participant GPU as Trainers (NVL72)
+  participant GPU as Writers (GDS)
   participant L as Local NVMe (append ring)
-  participant R as Rack NVMe-oF (RDMA/BF3)
-  participant FS as Global FS (GPFS ECE / Lustre)
+  participant R as Rack NVMe-oF (RDMA)
+  participant FS as Global FS (WEKA/GPFS/Lustre)
 
-  Note right of GPU: Parallel hot-commit (QD >> 1)
+  Note right of GPU: QD >> 1 (pipeline)
   GPU->>L: 4MiB writes (FUA/flush)
-  GPU->>R: 4MiB writes (RDMA, FUA/PLP)
-  Note over L,R: ACK = 2-of-2 in-rack (durable)
+  GPU->>R: 4MiB writes (RDMA)
+  Note over L,R: ACK when both are durable (2-of-2 in-rack)
   L-->>GPU: Local durable
   R-->>GPU: Rack durable
-  GPU-->>GPU: Checkpoint chunk ACK
-
-  R->>FS: Background drain (striped + EC)
-  FS-->>R: Drain complete (async)
+  GPU-->>GPU: App ACK
+  R->>FS: Background drain (striped/EC)
 ```
-
-### 3.3 North–South vs East–West (with Exabyte Tier)
-
-```mermaid
-flowchart LR
-  subgraph NS [North South Ingress Egress]
-    Edge[API Edge / Gateways]
-    VAST[VAST / Object S3]
-  end
-
-  subgraph EW [East West Inside DC]
-    subgraph Cells [NVL72 Cells]
-      LNV[Local NVMe per tray]
-      RNF[Rack NVMe-oF RDMA BF3]
-      FS1[WEKA]
-      FS2[GPFS ECE / Lustre]
-    end
-    Fabrics[Compute IB XDR 800; Storage IB XDR 800 or RoCE 2x400G]
-  end
-
-  subgraph EXA [Exabyte Tier Multi rack Object]
-    EXObj[Exabyte S3 Object; Wide EC 14+4 across racks]
-    Index[Metadata / Index / Vector DB]
-  end
-
-  Edge --> VAST
-  VAST --> FS1
-  VAST --> FS2
-  FS1 --> EXObj
-  FS2 --> EXObj
-  Index --> VAST
-  Cells --> Fabrics
-  LNV --> RNF
-  RNF --> FS1
-  RNF --> FS2
-```
-
-**Notes:**
-
-**N-S (long term):** VAST/Object for conversations, datasets, analytics, compliance; exabyte via wide EC + geo.
-
-**E-W (hot):** Local + Rack NVMe-oF supply latency; WEKA/GPFS/Lustre provide bandwidth and namespace.
-
-**Context/RAG:** Vector index in N-S; cells prefetch into Rack/Local.
 
 ### 3.4 Telemetry & Alarming (implements Option 2 gates)
 
 ```mermaid
 flowchart LR
-  EXP[Exporters: DCGM, GDS, NVMe-oF, FS, UFM, Spectrum X, IPMI] --> PROM[Prometheus]
+  EXP[Exporters: DCGM, GDS, NVMe-oF, FS, UFM/roce-stats, IPMI] --> PROM[Prometheus]
   PROM --> THANOS[Thanos Retention]
   PROM --> KAFKA[Kafka Stream]
   KAFKA --> SLO[SLO Engine and Anomaly]
-  SLO --> ALERTS[PagerDuty and ServiceNow]
+  SLO --> ALERTS[PagerDuty / ServiceNow]
   SLO --> ACTIONS[Orchestrator API]
 ```
-
-**Golden tests in CI/CD:** IOR/MLPerf-Storage, ib_write_bw, nccl-tests, fio NVMe-oF (RDMA), Triton dry-load.
 
 ### 3.5 Failure Domains & Guardrails
 
 ```mermaid
 stateDiagram-v2
   [*] --> Healthy
-
   Healthy --> SSD_Degraded: NVMe SMART & tail-lat up
   Healthy --> NIC_PortDown: Link down / ECN up
   Healthy --> ToR_Down: Storage leaf outage
   Healthy --> Tray_Down: Host crash
   Healthy --> Rack_Power: PDU or cooling loss
-
   SSD_Degraded --> Reweight_IO: Shift to Rack/Global (multipath)
   Reweight_IO --> Replace_SSD: Hot-swap + resync
   Replace_SSD --> Healthy
-
   NIC_PortDown --> Reroute: ECMP / IB path-cost adjust
   Reroute --> Healthy
-
   ToR_Down --> Use_Other_ToR: Dual-homed rails carry load
   Use_Other_ToR --> Healthy
-
   Tray_Down --> Serve_From_Rack: Rack NVMe-oF copy serves
   Serve_From_Rack --> Healthy
-
   Rack_Power --> Redirect: Route to other cells
   Redirect --> Healthy
 ```
@@ -272,85 +230,103 @@ stateDiagram-v2
 **Guardrails**
 
 - Quarantine budget ≤ 10% trays per rack.
-- Actions only on consecutive SLO breaches (no flapping).
-- Compute vs Storage fabrics isolated.
+- Act only on consecutive SLO breaches (no flapping).
+- Compute vs storage priorities enforced via QoS; management plane isolated.
 
-### 3.6 RDMA "Local" Strategy & Off-Rack Arrays
+## Bonus: "THE BEST" — Separate Storage Rails (Recommendation)
 
-**Node-local NVMe (8x E1.S):** append ring + warm weights (latency shield).
+If permitted, add dedicated storage rails per rack. This removes contention and tightens SLOs.
 
-**Rack NVMe-oF (SPDK RDMA, BF3 offload):** second in-rack durable copy; sized to add ≥ 100–150 GB/s per tray.
+### 4.1 What changes
 
-**ACK policy:** 2-of-2 in-rack durable with high QD.
+- Keep current dual 400 G rails for training/NCCL + east-west IP only.
+- Add storage fabric per rack:
+  - **S-IB:** InfiniBand XDR 800 G (1–2 ports per tray), or
+  - **S-Eth:** Spectrum-X Ethernet (800 G per SuperNIC or 2×400 GbE).
 
-**Off-rack arrays:** not in hot path; use behind global tier (capacity/object/DR).
+### 4.2 Revised SLOs (with separate rails)
 
-### 3.7 Vendor Fit (Quick Table)
+- **Per-rack checkpoint commit:** ≥ 120–200 GB/s guaranteed to storage, P99 4 MiB ≤ 0.8 ms.
+- **Per-rack dataset read:** ≥ 120–200 GB/s, independent of training load.
+- **Cluster drains:** scale linearly; e.g., 288 racks × 200 GB/s ≈ 57.6 TB/s storage ingress (right-size FS nodes accordingly).
 
-| Layer | Primary | Why | Best For | Alt |
-|-------|---------|-----|----------|-----|
-| Rack NVMe-oF | SPDK on BF3 | Lowest tail, offloads host | Second in-rack copy | SPDK on host |
-| Global FS (low-P99) | WEKA | User-space DP, dist. metadata | Inference/mixed I/O | — |
-| Global FS (drains/ns) | GPFS ECE | TB/s drains, declustered EC | Checkpoints, namespace | Lustre |
-| N-S / Multi-proto | VAST | NFS/SMB/S3, wide EC | Ingress/egress, analytics | — |
-| Alt FS | BeeGFS | Open, good metadata | Cost-balanced clusters | Less proven at extreme AI scale |
-| Fabrics | Quantum-X800 / Spectrum-X | 800G, multi-rail RDMA | E-W compute/storage | — |
-| Node FS | SPDK / XFS O_DIRECT | Lowest tail | Hot commit, warm cache | ZFS (if features needed) |
+### 4.3 Sketch (separate rails)
 
-### 3.8 Acronyms (expanded, alphabetized)
+```mermaid
+flowchart LR
+  subgraph ComputeRails [Compute Fabric (Training Only)]
+    NCCL[NCCL / Collectives (RoCE / IB)] --> RailA[Rail-A 400G]
+    NCCL --> RailB[Rail-B 400G]
+  end
+  subgraph StorageRails [Dedicated Storage Fabric]
+    STOR[Storage RDMA (GDS, NVMe-oF, FS)] --> SLeafA[Storage Leaf A]
+    STOR --> SLeafB[Storage Leaf B]
+  end
+  SLeafA --> SSpineA[Storage Spine A]
+  SLeafB --> SSpineB[Storage Spine B]
+```
 
-* **ACK** — Acknowledgement (here: application-level success after *durable* writes complete)
-* **AR** — Adaptive Routing (InfiniBand feature to avoid hot paths)
-* **BF3** — BlueField-3 DPU (NVIDIA data-processing unit / SmartNIC)
-* **CNI** — Container Network Interface (Kubernetes networking plug-in model)
-* **DCGM** — Data Center GPU Manager (NVIDIA GPU health/telemetry suite)
-* **DPDK** — Data Plane Development Kit (user-space packet I/O library)
-* **DPU** — Data Processing Unit (SmartNIC with offloads like NVMe-oF, IPsec, etc.)
-* **DR** — Disaster Recovery (off-site replication / restore strategy)
-* **EC** — Erasure Coding (redundant data layout, e.g., 8+2)
-* **ECMP** — Equal-Cost Multi-Path (multi-path routing/load-balancing on Ethernet)
-* **ECN** — Explicit Congestion Notification (marking used by RoCE congestion control)
-* **E2E** — End-to-End (full request path, including network, I/O, decode)
-* **FS** — Filesystem (parallel/distributed FS such as WEKA, GPFS, Lustre, VAST)
-* **FUA** — Force Unit Access (NVMe flag to persist data before reporting completion)
-* **GDS** — GPUDirect Storage (direct DMA path between storage and GPU memory)
-* **HBM** — High-Bandwidth Memory (on-package memory on the GPU)
+### 4.4 Back-end mapping & migration
+
+- **Latency cell(s):** WEKA on storage rails.
+- **Drain/namespace cell(s):** GPFS (ECE) or Lustre on storage rails.
+- **N-S multiprotocol:** VAST on services network.
+- **Migration:** rack-by-rack—cable 1 storage port, enable multi-rail; then add a 2nd port to reach ~200 GB/s per rack.
+
+## Acronyms (Expanded, Alphabetized)
+
+* **ACK** — Acknowledgement (here: app success after durable writes complete)
+* **AR** — Adaptive Routing (InfiniBand)
+* **BF3** — BlueField-3 DPU (SmartNIC with offloads)
+* **CI/CD** — Continuous Integration / Continuous Delivery
+* **CNI** — Container Network Interface (Kubernetes networking)
+* **DCGM** — Data Center GPU Manager (NVIDIA GPU health/telemetry)
+* **DPDK** — Data Plane Development Kit (user-space I/O)
+* **DPU** — Data Processing Unit (SmartNIC)
+* **EC** — Erasure Coding (e.g., 8+2)
+* **ECMP** — Equal-Cost Multi-Path (Ethernet multipath)
+* **ECN** — Explicit Congestion Notification (RoCE congestion mark)
+* **E2E** — End-to-End
+* **FS** — Filesystem (WEKA, GPFS, Lustre, VAST, etc.)
+* **FUA** — Force Unit Access (NVMe "persist before complete")
+* **GDS** — GPUDirect Storage (direct SSD↔GPU DMA)
+* **HBM** — High-Bandwidth Memory (on GPU)
 * **HCA** — Host Channel Adapter (InfiniBand NIC)
-* **IB** — InfiniBand (lossless HPC fabric; XDR=800 Gb/s generation)
-* **IOR** — Interleaved or Random (HPC I/O benchmark; part of IOR suite)
-* **IPMI** — Intelligent Platform Management Interface (baseboard mgmt/telemetry)
-* **JBOF** — Just a Bunch Of Flash (NVMe flash enclosure)
-* **KEDA** — Kubernetes Event-Driven Autoscaling (scales on external metrics/queues)
-* **KV (cache)** — Key-Value cache (per-request context memory for inference)
-* **L4/L7** — Layer 4/Layer 7 (transport/application layers in networking)
-* **LAG** — Link Aggregation Group (802.3ad; avoid for RDMA data paths)
-* **LNet** — Lustre Networking stack (client/server transport for Lustre)
-* **MLPerf-Storage** — MLPerf benchmark profile for storage I/O (e.g., checkpoint profile)
-* **NCCL** — NVIDIA Collective Communications Library (collectives for multi-GPU training)
-* **NDR/XDR** — IB speed gens: NDR=400 Gb/s, XDR=800 Gb/s per port
-* **NFD** — Node Feature Discovery (Kubernetes node labeling of hardware features)
+* **IB** — InfiniBand (HPC fabric; NDR=400 G, XDR=800 G)
+* **IOR** — HPC I/O benchmark (part of IOR suite)
+* **IPMI** — Intelligent Platform Management Interface (BMC telemetry)
+* **JBOF** — Just a Bunch Of Flash (NVMe enclosure)
+* **KEDA** — Kubernetes Event-Driven Autoscaling
+* **KV (cache)** — Key-Value cache (per-request context)
+* **L4/L7** — Layer-4/Layer-7 networking
+* **LAG** — Link Aggregation Group (avoid for RDMA data paths)
+* **LNet** — Lustre Networking stack
+* **MLPerf-Storage** — MLPerf storage I/O workload (e.g., checkpoint profile)
+* **NCCL** — NVIDIA Collective Communications Library (multi-GPU collectives)
+* **NDR/XDR** — InfiniBand gens (NDR=400 Gb/s, XDR=800 Gb/s per port)
+* **NFD** — Node Feature Discovery (Kubernetes)
 * **NIC** — Network Interface Card
-* **N–S / E–W** — North–South (ingress/egress) / East–West (internal DC traffic)
-* **NVLink** — NVIDIA high-speed GPU interconnect (within NVL72 domain)
-* **NVMe** — Non-Volatile Memory Express (protocol for SSDs)
-* **NVMe-oF** — NVMe over Fabrics (NVMe over RDMA/TCP to remote targets)
-* **PLP** — Power-Loss Protection (SSD capacitors guaranteeing write persistence)
-* **P99** — 99th-percentile latency (tail latency SLO)
-* **QP / QD** — Queue Pair / Queue Depth (RDMA connection objects / outstanding I/O count)
-* **RAG** — Retrieval-Augmented Generation (fetch context for inference)
-* **RDMA** — Remote Direct Memory Access (zero-copy, kernel-bypass I/O over IB/RoCE)
-* **RFS** — Ready-For-Service gate (pre-production acceptance)
-* **RoCE** — RDMA over Converged Ethernet (RDMA on Ethernet with PFC/ECN)
-* **SHARP** — Scalable Hierarchical Aggregation and Reduction Protocol (IB switch collective offload)
-* **SLA / SLO** — Service Level Agreement / Objective (contracted target vs internal target)
-* **SMB / NFS / S3** — Protocols: Server Message Block, Network File System, Simple Storage Service (object)
-* **SPDK** — Storage Performance Development Kit (user-space NVMe/NVMe-oF stack)
-* **SR-IOV** — Single-Root I/O Virtualization (expose NIC VFs to pods/VMs)
+* **N-S / E-W** — North-South (ingress/egress) / East-West (intra-DC)
+* **NVLink** — NVIDIA GPU interconnect (within NVL72 domain)
+* **NVMe / NVMe-oF** — Non-Volatile Memory express / NVMe over Fabrics
+* **PLP** — Power-Loss Protection (SSD capacitors)
+* **P99** — 99th-percentile latency (tail)
+* **QP / QD** — Queue Pair / Queue Depth (RDMA)
+* **QoS** — Quality of Service (priority/shaping)
+* **RAG** — Retrieval-Augmented Generation
+* **RDMA** — Remote Direct Memory Access (zero-copy I/O)
+* **RFS** — Ready-For-Service (gate: pre-prod acceptance)
+* **RoCE** — RDMA over Converged Ethernet
+* **SHARP** — Switch-accelerated reduction (InfiniBand)
+* **SLA / SLO** — Service Level Agreement / Objective
+* **SMB / NFS / S3** — File/Object protocols (Server Message Block, Network File System, Simple Storage Service)
+* **SPDK** — Storage Performance Development Kit (user-space NVMe/NVMe-oF)
+* **SR-IOV** — Single-Root I/O Virtualization
 * **TCP** — Transmission Control Protocol
 * **ToR** — Top-of-Rack switch
-* **TTL** — Time-To-Live (cache expiration policy)
-* **UFM** — Unified Fabric Manager (NVIDIA IB fabric manager/telemetry)
-* **Vector DB** — Vector database (embeddings/ANN index for RAG)
-* **WEKA** — WekaFS (user-space, RDMA-optimized parallel filesystem)
-* **ZFS** — Zettabyte File System (checksum/snapshot-rich filesystem)
-* **ZNS** — Zoned Namespace (SSD mode optimized for append patterns)
+* **TTL** — Time-To-Live (cache expiration)
+* **UFM** — Unified Fabric Manager (IB fabric telemetry)
+* **Vector DB** — Vector database (embeddings/ANN index)
+* **WEKA** — WekaFS (user-space, RDMA-optimized parallel FS)
+* **ZFS** — Zettabyte File System
+* **ZNS** — Zoned Namespace (append-friendly SSD mode)
