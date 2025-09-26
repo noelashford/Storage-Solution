@@ -1,6 +1,6 @@
 # Starcluster GB300 / NVL72 — Storage Deliverable (50 MW)
 
-This document delivers Option 1 (Checkpoint SLOs & Capacity Model) and Option 2 (Storage Acceptance Test Plan) as requested. Sections 3 and 4 are bonus architecture: Section 3 aligns to the current dual 400 G shared-rail site plan; Section 4 proposes the best-possible variant with separate storage rails.
+This document delivers Option 1 (Checkpoint SLOs & Capacity Model) and Option 2 (Storage Acceptance Test Plan) as requested. Sections 3 and 4 are bonus architecture: Section 3 aligns to the current dual 400 G shared-rail site plan; Section 4 proposes the best-possible variant with separate 800 G storage rails.
 
 ## Table of Contents
 
@@ -21,11 +21,12 @@ This document delivers Option 1 (Checkpoint SLOs & Capacity Model) and Option 2 
     - [3.3 Training (Throughput-First)](#33-training-throughput-first)
     - [3.4 Telemetry \& Alarming (implements Option 2 gates)](#34-telemetry--alarming-implements-option-2-gates)
     - [3.5 Failure Domains \& Guardrails](#35-failure-domains--guardrails)
-  - [Bonus: "THE BEST" — Separate Storage Rails (Recommendation)](#bonus-the-best--separate-storage-rails-recommendation)
-    - [4.1 What changes](#41-what-changes)
-    - [4.2 Revised SLOs (with separate rails)](#42-revised-slos-with-separate-rails)
-    - [4.3 Sketch (separate rails)](#43-sketch-separate-rails)
+  - [Bonus: "THE BEST" — Separate 800 G Storage Rails (Recommendation)](#bonus-the-best--separate-800-g-storage-rails-recommendation)
+    - [4.1 What we actually recommend for "THE BEST"](#41-what-we-actually-recommend-for-the-best)
+    - [4.2 Revised SLOs (BEST-Full800)](#42-revised-slos-best-full800)
+    - [4.3 Architecture diagrams](#43-architecture-diagrams)
     - [4.4 Back-end mapping \& migration](#44-back-end-mapping--migration)
+    - [4.5 Quick comparison](#45-quick-comparison)
   - [Acronyms (Expanded, Alphabetized)](#acronyms-expanded-alphabetized)
 
 ## Option 1 — Checkpoint SLOs & Capacity Model
@@ -135,14 +136,14 @@ Implements the SLOs and test plan on the current site plan: storage shares the s
 
 ```mermaid
 flowchart LR
-  subgraph RACK [Rack Dual 400G Rails Shared]
-    TRAIN[Training RDMA High Priority Lossless]
-    STOR[Storage and IP Lower Priority QoS]
+  subgraph RACK [Rack: Dual 400G Rails (Shared)]
+    TRAIN[Training RDMA (High Priority, Lossless)]
+    STOR[Storage + IP (Lower Priority QoS)]
   end
-  TRAIN --> RailA[Rail A 400G]
-  TRAIN --> RailB[Rail B 400G]
-  STOR --> RailA
-  STOR --> RailB
+  TRAIN -- RoCEv2 --> RailA[Rail-A 400G]
+  TRAIN -- RoCEv2 --> RailB[Rail-B 400G]
+  STOR -- RoCEv2 --> RailA
+  STOR -- RoCEv2 --> RailB
 ```
 
 - Training traffic runs in a higher-priority lossless class.
@@ -196,11 +197,11 @@ sequenceDiagram
 
 ```mermaid
 flowchart LR
-  EXP[Exporters DCGM GDS NVMe oF FS UFM RoCE stats IPMI] --> PROM[Prometheus]
+  EXP[Exporters: DCGM, GDS, NVMe-oF, FS, UFM/roce-stats, IPMI] --> PROM[Prometheus]
   PROM --> THANOS[Thanos Retention]
   PROM --> KAFKA[Kafka Stream]
   KAFKA --> SLO[SLO Engine and Anomaly]
-  SLO --> ALERTS[PagerDuty ServiceNow]
+  SLO --> ALERTS[PagerDuty / ServiceNow]
   SLO --> ACTIONS[Orchestrator API]
 ```
 
@@ -233,39 +234,76 @@ stateDiagram-v2
 - Act only on consecutive SLO breaches (no flapping).
 - Compute vs storage priorities enforced via QoS; management plane isolated.
 
-## Bonus: "THE BEST" — Separate Storage Rails (Recommendation)
+## Bonus: "THE BEST" — Separate 800 G Storage Rails (Recommendation)
 
-If permitted, add dedicated storage rails per rack. This removes contention and tightens SLOs.
+Two variants (pick per optics/availability):
 
-### 4.1 What changes
+### 4.1 What we actually recommend for "THE BEST"
 
-- Keep current dual 400 G rails for training/NCCL + east-west IP only.
-- Add storage fabric per rack:
-  - **S-IB:** InfiniBand XDR 800 G (1–2 ports per tray), or
-  - **S-Eth:** Spectrum-X Ethernet (800 G per SuperNIC or 2×400 GbE).
+**1. BEST-Full800 — Compute 800 G + Storage 800 G** (max headroom, cleanest isolation)
+- **Compute (training/NCCL):** 1–2× **800 G** per tray on a dedicated compute fabric (IB XDR 800 G preferred; Spectrum-X 800 G if Ethernet).
+- **Storage:** 1–2× **800 G** per tray on a dedicated storage fabric.
+- **Why:** Removes contention *and* lifts NCCL ceiling; simplest performance story.
 
-### 4.2 Revised SLOs (with separate rails)
+**2. BEST-Storage800 — Compute stays 2×400 G; Storage 800 G** (lower change blast radius)
+- Keep existing training rails and add 800 G storage rails to eliminate storage contention now.
+- Upgrade compute rails later if/when optics, power, or scheduling allow.
 
-- **Per-rack checkpoint commit:** ≥ 120–200 GB/s guaranteed to storage, P99 4 MiB ≤ 0.8 ms.
-- **Per-rack dataset read:** ≥ 120–200 GB/s, independent of training load.
-- **Cluster drains:** scale linearly; e.g., 288 racks × 200 GB/s ≈ 57.6 TB/s storage ingress (right-size FS nodes accordingly).
+**Practical notes (GB300 trays):**
+- GB300 trays expose multiple **ConnectX-8 SuperNIC** ports; you can assign **800 G** ports to compute and storage independently (multi-rail on both).
+- If you must keep Ethernet on compute, **Spectrum-X 800 G** works; otherwise **Quantum-X800 IB** is the cleanest for NCCL.
 
-### 4.3 Sketch (separate rails)
+### 4.2 Revised SLOs (BEST-Full800)
+
+**Training (compute rails 800 G):** improved NCCL bw/latency, better multi-rail scaling; fewer QoS interventions.
+
+**Per-rack checkpoint commit (storage rails 800 G):**
+- **1×800 G storage port per tray:** **≥ 120 GB/s**
+- **2×800 G storage ports per tray:** **≥ 200 GB/s**
+- **P99 4 MiB ≤ 0.8 ms** (GDS/RDMA)
+
+**Dataset reads (storage rails 800 G):** **≥ 120–200 GB/s**, independent of training load.
+
+**Cluster drains:** linear with number of racks × per-rack storage SLO (e.g., 288 × 200 GB/s ≈ **57.6 TB/s** ingress).
+
+### 4.3 Architecture diagrams
+
+**BEST-Full800 (Compute 800 G + Storage 800 G):**
 
 ```mermaid
 flowchart LR
-  subgraph ComputeRails [Compute Fabric Training Only]
+  subgraph ComputeRails [Compute Fabric 800G Training Only]
+    NCCL[NCCL Collectives] --> CLeafA[Compute Leaf A 800G]
+    NCCL --> CLeafB[Compute Leaf B 800G]
+  end
+
+  subgraph StorageRails [Dedicated Storage Fabric 800G]
+    STOR[Storage RDMA GDS NVMe oF FS] --> SLeafA[Storage Leaf A 800G]
+    STOR --> SLeafB[Storage Leaf B 800G]
+  end
+
+  CLeafA --> CSpineA[Compute Spine A 800G]
+  CLeafB --> CSpineB[Compute Spine B 800G]
+  SLeafA --> SSpineA[Storage Spine A 800G]
+  SLeafB --> SSpineB[Storage Spine B 800G]
+```
+
+**BEST-Storage800 (transitional - Storage-only 800 G):**
+
+```mermaid
+flowchart LR
+  subgraph ComputeRails [Compute Fabric 2x400G Training]
     NCCL[NCCL Collectives] --> RailA[Rail A 400G]
     NCCL --> RailB[Rail B 400G]
   end
 
-  subgraph StorageRails [Dedicated Storage Fabric]
-    STOR[Storage RDMA GDS NVMe oF FS] --> SLeafA[Storage Leaf A]
-    STOR --> SLeafB[Storage Leaf B]
+  subgraph StorageRails [Dedicated Storage Fabric 800G]
+    STOR[Storage RDMA GDS NVMe oF FS] --> SLeafA[Storage Leaf A 800G]
+    STOR --> SLeafB[Storage Leaf B 800G]
   end
 
-  SLeafA --> SSpineA[Storage Spine A]
-  SLeafB --> SSpineB[Storage Spine B]
+  SLeafA --> SSpineA[Storage Spine A 800G]
+  SLeafB --> SSpineB[Storage Spine B 800G]
 ```
 
 ### 4.4 Back-end mapping & migration
@@ -273,7 +311,18 @@ flowchart LR
 - **Latency cell(s):** WEKA on storage rails.
 - **Drain/namespace cell(s):** GPFS (ECE) or Lustre on storage rails.
 - **N-S multiprotocol:** VAST on services network.
-- **Migration:** rack-by-rack—cable 1 storage port, enable multi-rail; then add a 2nd port to reach ~200 GB/s per rack.
+- **Migration:** rack-by-rack—cable 1×800 G storage port, enable multi-rail; then add the 2nd 800 G port to reach ~200 GB/s per rack.
+
+### 4.5 Quick comparison
+
+| Design | Training Rails | Storage Rails | Per-rack storage SLO (write) | P99 (4 MiB) | Contention |
+|--------|----------------|---------------|------------------------------|-------------|------------|
+| Current plan (shared) | 2×400 G | Shared on same rails (lower QoS) | ≥ 68–80 GB/s | ≤ 0.8 ms | Yes (QoS mitigates) |
+| BEST-Storage800 | 2×400 G | 1×800 G dedicated | ≥ 120 GB/s | ≤ 0.8 ms | Storage: No, Compute: Existing |
+| BEST-Full800 | 1-2×800 G | 1-2×800 G dedicated | ≥ 120–200 GB/s | ≤ 0.8 ms | No |
+
+**One-liner for the deck:**
+"In the BEST design we dedicate **800 G** to **both** compute and storage fabrics. That removes contention, raises the NCCL ceiling, and guarantees **≥ 120–200 GB/s** per rack to storage with **sub-ms P99**—or, as a transitional step, we can keep compute at **2×400 G** and still get the storage benefits by adding **800 G** storage rails."
 
 ## Acronyms (Expanded, Alphabetized)
 
