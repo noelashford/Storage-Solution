@@ -135,14 +135,14 @@ Implements the SLOs and test plan on the current site plan: storage shares the s
 
 ```mermaid
 flowchart LR
-  subgraph RACK [Rack: Dual 400G Rails (Shared)]
-    TRAIN[Training RDMA (High Priority, Lossless)]
-    STOR[Storage + IP (Lower Priority QoS)]
+  subgraph RACK [Rack Dual 400G Rails Shared]
+    TRAIN[Training RDMA High Priority Lossless]
+    STOR[Storage and IP Lower Priority QoS]
   end
-  TRAIN -- RoCEv2 --> RailA[Rail-A 400G]
-  TRAIN -- RoCEv2 --> RailB[Rail-B 400G]
-  STOR -- RoCEv2 --> RailA
-  STOR -- RoCEv2 --> RailB
+  TRAIN --> RailA[Rail A 400G]
+  TRAIN --> RailB[Rail B 400G]
+  STOR --> RailA
+  STOR --> RailB
 ```
 
 - Training traffic runs in a higher-priority lossless class.
@@ -196,11 +196,11 @@ sequenceDiagram
 
 ```mermaid
 flowchart LR
-  EXP[Exporters: DCGM, GDS, NVMe-oF, FS, UFM/roce-stats, IPMI] --> PROM[Prometheus]
+  EXP[Exporters DCGM GDS NVMe oF FS UFM RoCE stats IPMI] --> PROM[Prometheus]
   PROM --> THANOS[Thanos Retention]
   PROM --> KAFKA[Kafka Stream]
   KAFKA --> SLO[SLO Engine and Anomaly]
-  SLO --> ALERTS[PagerDuty / ServiceNow]
+  SLO --> ALERTS[PagerDuty ServiceNow]
   SLO --> ACTIONS[Orchestrator API]
 ```
 
@@ -254,14 +254,16 @@ If permitted, add dedicated storage rails per rack. This removes contention and 
 
 ```mermaid
 flowchart LR
-  subgraph ComputeRails [Compute Fabric (Training Only)]
-    NCCL[NCCL / Collectives (RoCE / IB)] --> RailA[Rail-A 400G]
-    NCCL --> RailB[Rail-B 400G]
+  subgraph ComputeRails [Compute Fabric Training Only]
+    NCCL[NCCL Collectives] --> RailA[Rail A 400G]
+    NCCL --> RailB[Rail B 400G]
   end
+
   subgraph StorageRails [Dedicated Storage Fabric]
-    STOR[Storage RDMA (GDS, NVMe-oF, FS)] --> SLeafA[Storage Leaf A]
+    STOR[Storage RDMA GDS NVMe oF FS] --> SLeafA[Storage Leaf A]
     STOR --> SLeafB[Storage Leaf B]
   end
+
   SLeafA --> SSpineA[Storage Spine A]
   SLeafB --> SSpineB[Storage Spine B]
 ```
