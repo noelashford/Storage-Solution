@@ -1,6 +1,29 @@
-# Starcluster GB300 / NVL72 — Storage Deliverable
+# Starcluster GB300 / NVL72 Storage Solution(s)
 
 **50MW Deployment**
+
+## Table of Contents
+
+- [Starcluster GB300 / NVL72 Storage Solution(s)](#starcluster-gb300--nvl72-storage-solutions)
+  - [Table of Contents](#table-of-contents)
+  - [Option 1 — Checkpoint SLOs \& Capacity Model](#option-1--checkpoint-slos--capacity-model)
+    - [1.1 Scope \& Baseline](#11-scope--baseline)
+    - [1.2 SLOs (Targets)](#12-slos-targets)
+    - [1.3 Capacity Model (Simple, Rack-Driven)](#13-capacity-model-simple-rack-driven)
+  - [Option 2 — Storage Acceptance Test Plan (RFS Gate)](#option-2--storage-acceptance-test-plan-rfs-gate)
+    - [2.1 Principles](#21-principles)
+    - [2.2 Tooling](#22-tooling)
+    - [2.3 Test Matrix (excerpt)](#23-test-matrix-excerpt)
+    - [2.4 Gate \& Rollout](#24-gate--rollout)
+  - [Section 3 — Bonus: Proposed Architectures, Flows, Telemetry, Fault Domains](#section-3--bonus-proposed-architectures-flows-telemetry-fault-domains)
+    - [3.1 Inference-First (Latency Champion)](#31-inference-first-latency-champion)
+    - [3.2 Training-First (Throughput Champion)](#32-training-first-throughput-champion)
+    - [3.3 North–South vs East–West (with Exabyte Tier)](#33-northsouth-vs-eastwest-with-exabyte-tier)
+    - [3.4 Telemetry \& Alarming (implements Option 2 gates)](#34-telemetry--alarming-implements-option-2-gates)
+    - [3.5 Failure Domains \& Guardrails](#35-failure-domains--guardrails)
+    - [3.6 RDMA "Local" Strategy \& Off-Rack Arrays](#36-rdma-local-strategy--off-rack-arrays)
+    - [3.7 Vendor Fit (Quick Table)](#37-vendor-fit-quick-table)
+    - [3.8 Acronyms (expanded, alphabetized)](#38-acronyms-expanded-alphabetized)
 
 ## Option 1 — Checkpoint SLOs & Capacity Model
 
